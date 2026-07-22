@@ -1,0 +1,6 @@
+{
+  "name": "AI Vehicle Processing Platform",
+  "description": "AI-powered Vehicle Image Processing Platform with Computer Vision, OCR, Quality Analysis, Blur & Tamper Detection, and LLM Reasoning Agent",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

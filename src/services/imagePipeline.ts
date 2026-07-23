@@ -1,8 +1,8 @@
 import ExifReader from 'exifreader';
 import path from 'path';
 import sharp from 'sharp';
-import { createWorker } from 'tesseract.js';
 import { SAMPLE_VEHICLES } from '../data/sampleVehicles';
+import { JOB_STORE } from './jobStore.ts';
 import {
   BoundingBox,
   DetectionCategory,
@@ -120,14 +120,13 @@ function isServerlessRuntime(): boolean {
 }
 
 // In-memory Job Store for background tasks & live status queue
-export const JOB_STORE = new Map<string, VehicleProcessingReport>();
-
 // Global cached Tesseract worker instance for high-speed OCR reuse
 let cachedWorkerPromise: Promise<any> | null = null;
 
 async function getCachedTesseractWorker() {
   if (!cachedWorkerPromise) {
     cachedWorkerPromise = (async () => {
+      const { createWorker } = await import('tesseract.js');
       const w = await createWorker('eng');
       await w.setParameters({
         tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ',

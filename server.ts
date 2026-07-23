@@ -4,7 +4,8 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { SAMPLE_VEHICLES } from './src/data/sampleVehicles';
 import { answerAgentQuestion } from './src/services/aiAgent';
-import { buildVehicleProcessingReport, JOB_STORE, processVehicleImageJob } from './src/services/imagePipeline';
+import { buildVehicleProcessingReport, processVehicleImageJob } from './src/services/imagePipeline';
+import { JOB_STORE } from './src/services/jobStore.ts';
 import { VehicleProcessingReport } from './src/types';
 
 // Configure multer memory storage

@@ -1,5 +1,5 @@
 import { answerAgentQuestion } from '../src/services/aiAgent';
-import { JOB_STORE } from '../src/services/imagePipeline';
+import { JOB_STORE } from '../src/services/jobStore.ts';
 import { applyCors, logApi, logApiError } from './_utils';
 
 export default async function handler(req: any, res: any) {

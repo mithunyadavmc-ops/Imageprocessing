@@ -1,6 +1,6 @@
-import multer from 'multer';
 import { applyCors, logApi, logApiError } from './_utils';
-import { buildVehicleProcessingReport, JOB_STORE } from '../src/services/imagePipeline';
+import { JOB_STORE } from '../src/services/jobStore';
+import { buildServerlessFallbackReport } from '../src/services/serverlessFallbackReport';
 
 export const config = {
   api: {
@@ -10,23 +10,6 @@ export const config = {
   },
   maxDuration: 60,
 };
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 },
-});
-
-function runUpload(req: any, res: any): Promise<void> {
-  return new Promise((resolve, reject) => {
-    upload.single('image')(req, res, (err: unknown) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve();
-    });
-  });
-}
 
 function readJsonBody(req: any): Promise<any> {
   if (req.body && typeof req.body === 'object') {
@@ -75,37 +58,24 @@ export default async function handler(req: any, res: any) {
       contentType: req.headers['content-type'] || 'unknown',
     });
 
-    const contentType = String(req.headers['content-type'] || '');
-    if (contentType.includes('multipart/form-data')) {
-      await runUpload(req, res);
-      if (req.file) {
-        imageBuffer = req.file.buffer;
-        filename = req.file.originalname;
-        logApi('api/upload', 'multipart image received', {
-          filename,
-          bytes: imageBuffer.length,
-        });
-      }
-    } else {
-      const body = await readJsonBody(req);
-      if (body?.presetKey) {
-        presetKey = body.presetKey;
-        filename = `${presetKey}.jpg`;
-        logApi('api/upload', 'preset request received', { presetKey });
-      } else if (body?.image) {
-        const base64Str = String(body.image);
-        filename = body.filename || filename;
-        const matches = base64Str.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-        imageBuffer = Buffer.from(matches?.[2] || base64Str, 'base64');
-        logApi('api/upload', 'json image received', {
-          filename,
-          bytes: imageBuffer.length,
-          width: body.width,
-          height: body.height,
-          originalBytes: body.originalBytes,
-          processedBytes: body.processedBytes,
-        });
-      }
+    const body = await readJsonBody(req);
+    if (body?.presetKey) {
+      presetKey = body.presetKey;
+      filename = `${presetKey}.jpg`;
+      logApi('api/upload', 'preset request received', { presetKey });
+    } else if (body?.image) {
+      const base64Str = String(body.image);
+      filename = body.filename || filename;
+      const matches = base64Str.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      imageBuffer = Buffer.from(matches?.[2] || base64Str, 'base64');
+      logApi('api/upload', 'json image received', {
+        filename,
+        bytes: imageBuffer.length,
+        width: body.width,
+        height: body.height,
+        originalBytes: body.originalBytes,
+        processedBytes: body.processedBytes,
+      });
     }
 
     if (!imageBuffer && !presetKey) {
@@ -118,7 +88,18 @@ export default async function handler(req: any, res: any) {
 
     const jobId = `proc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     logApi('api/upload', 'analysis started', { jobId, filename });
-    const report = await buildVehicleProcessingReport(jobId, imageBuffer, filename, presetKey);
+    const report = buildServerlessFallbackReport(
+      jobId,
+      body?.image || null,
+      filename,
+      presetKey,
+      {
+        width: body?.width,
+        height: body?.height,
+        originalBytes: body?.originalBytes,
+        processedBytes: body?.processedBytes,
+      }
+    );
     JOB_STORE.set(jobId, report);
 
     logApi('api/upload', 'analysis completed', {

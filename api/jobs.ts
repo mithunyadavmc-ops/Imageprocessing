@@ -1,4 +1,4 @@
-import { JOB_STORE } from '../src/services/imagePipeline';
+import { JOB_STORE } from '../src/services/jobStore.ts';
 import { applyCors } from './_utils';
 
 export default function handler(_req: any, res: any) {

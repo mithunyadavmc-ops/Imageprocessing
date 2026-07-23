@@ -4,7 +4,7 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { SAMPLE_VEHICLES } from './src/data/sampleVehicles';
 import { answerAgentQuestion } from './src/services/aiAgent';
-import { JOB_STORE, processVehicleImageJob } from './src/services/imagePipeline';
+import { buildVehicleProcessingReport, JOB_STORE, processVehicleImageJob } from './src/services/imagePipeline';
 import { VehicleProcessingReport } from './src/types';
 
 // Configure multer memory storage
@@ -171,6 +171,16 @@ async function startServer() {
 
       JOB_STORE.set(jobId, initialJobRecord);
 
+      if (process.env.VERCEL === '1') {
+        const completedReport = await buildVehicleProcessingReport(jobId, imageBuffer, filename, presetKey);
+        JOB_STORE.set(jobId, completedReport);
+        return res.status(200).json({
+          processing_id: jobId,
+          status: 'Completed',
+          report: completedReport,
+        });
+      }
+
       // Trigger background processing asynchronously without blocking response
       processVehicleImageJob(jobId, imageBuffer, filename, presetKey);
 
@@ -242,12 +252,12 @@ async function startServer() {
 
   // API Route: POST /api/ask-agent - AI Agent follow-up chat endpoint
   app.post('/api/ask-agent', async (req: Request, res: Response) => {
-    const { processing_id, question } = req.body;
-    if (!processing_id || !question) {
+    const { processing_id, question, report } = req.body;
+    if (!question) {
       return res.status(400).json({ error: 'Missing processing_id or question.' });
     }
 
-    const job = JOB_STORE.get(processing_id);
+    const job = (processing_id ? JOB_STORE.get(processing_id) : undefined) || report;
     if (!job) {
       return res.status(404).json({ error: 'Job not found.' });
     }

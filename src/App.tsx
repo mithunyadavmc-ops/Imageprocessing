@@ -36,6 +36,22 @@ export default function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [activeProcessingId, setActiveProcessingId] = useState<string | null>(null);
 
+  const handleCompletedReport = useCallback((reportData: VehicleProcessingReport) => {
+    setCurrentReport(reportData);
+    setJobs((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((job) => job.processing_id === reportData.processing_id);
+      if (idx >= 0) {
+        next[idx] = reportData;
+      } else {
+        next.unshift(reportData);
+      }
+      return next;
+    });
+    setIsUploading(false);
+    setActiveProcessingId(null);
+  }, []);
+
   // Fetch jobs list on load and periodically
   const fetchJobs = useCallback(async () => {
     try {
@@ -127,17 +143,7 @@ export default function App() {
             const resultRes = await fetch(`/api/results/${processingId}`);
             if (resultRes.ok) {
               const reportData = await resultRes.json();
-              setCurrentReport(reportData);
-              setJobs((prev) => {
-                const next = [...prev];
-                const idx = next.findIndex((job) => job.processing_id === reportData.processing_id);
-                if (idx >= 0) {
-                  next[idx] = reportData;
-                } else {
-                  next.unshift(reportData);
-                }
-                return next;
-              });
+              handleCompletedReport(reportData);
             }
           }
         }
@@ -190,7 +196,9 @@ export default function App() {
       });
 
       const data = await res.json();
-      if (data.processing_id) {
+      if (data.report) {
+        handleCompletedReport(data.report);
+      } else if (data.processing_id) {
         pollJobStatus(data.processing_id);
       } else {
         setIsUploading(false);
@@ -214,7 +222,9 @@ export default function App() {
       });
 
       const data = await res.json();
-      if (data.processing_id) {
+      if (data.report) {
+        handleCompletedReport(data.report);
+      } else if (data.processing_id) {
         pollJobStatus(data.processing_id);
       } else {
         setIsUploading(false);

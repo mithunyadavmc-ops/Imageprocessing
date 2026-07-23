@@ -37,6 +37,7 @@ export const AiAgentSummaryCard: React.FC<AiAgentSummaryCardProps> = ({ report }
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           processing_id: report.processing_id,
+          report,
           question: userText,
         }),
       });

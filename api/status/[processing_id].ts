@@ -1,0 +1,22 @@
+import { JOB_STORE } from '../../src/services/imagePipeline';
+
+export default function handler(req: any, res: any) {
+  const jobId = req.query?.processing_id;
+  const job = JOB_STORE.get(jobId);
+
+  if (!job) {
+    res.status(404).json({
+      error: `Processing ID '${jobId}' not found. In serverless deployments, /api/upload returns the completed report directly.`,
+    });
+    return;
+  }
+
+  res.status(200).json({
+    processing_id: job.processing_id,
+    status: job.status,
+    progress: job.progress,
+    pipeline_steps: job.pipeline_steps || [],
+    filename: job.filename,
+    upload_time: job.upload_time,
+  });
+}

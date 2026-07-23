@@ -258,6 +258,18 @@ function createDataUrlFromBuffer(buffer: Buffer | null, filename: string): strin
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
+function createCompletedPipelineSteps(): PipelineStepStatus[] {
+  return [
+    { step: 'read', label: 'Reading Image Buffer', status: 'completed', durationMs: 120 },
+    { step: 'preprocess', label: 'Image Preprocessing & Normalization', status: 'completed', durationMs: 250 },
+    { step: 'cnn', label: 'CNN Feature Extraction & Object Detection', status: 'completed', durationMs: 400 },
+    { step: 'ocr', label: 'OCR & License Plate Validation', status: 'completed', durationMs: 350 },
+    { step: 'quality', label: 'Quality & Blur Analysis (Laplacian)', status: 'completed', durationMs: 200 },
+    { step: 'tamper', label: 'Tamper & Screenshot Detection', status: 'completed', durationMs: 300 },
+    { step: 'ai_agent', label: 'AI Agent Reasoning & Synthesis', status: 'completed', durationMs: 500 },
+  ];
+}
+
 async function inferImageAnalysis(
   imageBuffer: Buffer | null,
   filename: string,
@@ -597,7 +609,7 @@ async function inferImageAnalysis(
 
       // Analyze license plate color directly from image pixels if Gemini Vision did not supply it
       if (!geminiPlateColor && imageBuffer && imageBuffer.length > 0) {
-        const pixelColorRes = await detectPlateColorFromPixels(imageBuffer, detectedPlateBox);
+        const pixelColorRes = await detectPlateColorFromPixels(imageBuffer, detectedPlateBox || undefined);
         if (pixelColorRes.plateColor) {
           geminiPlateColor = pixelColorRes.plateColor;
           geminiPlateType = pixelColorRes.plateType;
@@ -860,101 +872,18 @@ export async function processVehicleImageJob(
     updateJob(20, 0);
 
     const existingReports = Array.from(JOB_STORE.values()).filter((entry) => entry.processing_id !== jobId);
-    
+
     updateJob(50, 3);
-    const report = await inferImageAnalysis(imageBuffer, filename, existingReports);
+    const finalReport = await buildVehicleProcessingReport(
+      jobId,
+      imageBuffer,
+      filename,
+      presetKey,
+      existingReports
+    );
 
     updateJob(85, 5);
-
-    if (presetKey) {
-      const presetObj = SAMPLE_VEHICLES.find((p) => p.id === presetKey);
-      if (presetObj && presetObj.mockReport) {
-        Object.assign(report, presetObj.mockReport);
-        const presetValidation = validateIndianNumberPlate(presetObj.mockReport.number_plate || '');
-        report.number_plate = presetValidation.cleanedText === 'Not Detected' ? 'Not Detected' : presetValidation.cleanedText || presetObj.mockReport.number_plate || '';
-        report.plate_valid = presetValidation.isValid;
-        report.invalid_reason = presetValidation.isValid ? undefined : presetValidation.reason;
-        report.state_code = presetValidation.stateCode || 'Unknown';
-        report.state_name = presetValidation.stateName || 'Unknown';
-        report.district_code = presetValidation.districtCode || 'Unknown';
-        report.district_name = presetValidation.districtName || 'Unknown';
-      }
-    }
-
-    // Invoke secondary AI report synthesis only if not already generated during single-pass Gemini Vision
-    if (!report.ai_summary || report.ai_summary.startsWith('Image analysis indicates')) {
-      const aiResult = await generateAiReport(report as Partial<VehicleProcessingReport>);
-      report.ai_summary = aiResult.summary || report.ai_summary;
-      report.ai_suitability = aiResult.suitability || report.ai_suitability;
-    }
-
-    for (let i = 0; i < steps.length; i++) {
-      steps[i].status = 'completed';
-    }
-
-    const imageUrl = presetKey
-      ? SAMPLE_VEHICLES.find((p) => p.id === presetKey)?.imageUrl || createDataUrlFromBuffer(imageBuffer, filename)
-      : createDataUrlFromBuffer(imageBuffer, filename);
-
-    const finalReport: VehicleProcessingReport = {
-      processing_id: jobId,
-      filename,
-      upload_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
-      status: 'Completed',
-      progress: 100,
-      pipeline_steps: steps,
-      image_url: imageUrl,
-      vehicle_type: report.vehicle_type || 'Unable to determine',
-      vehicle_category: report.vehicle_category || 'Car',
-      manufacturer: report.manufacturer || 'Unable to determine',
-      model: report.model || 'Unable to determine',
-      body_type: report.body_type || 'Unable to determine',
-      vehicle_color: report.vehicle_color || 'Unable to determine',
-      estimated_year: report.estimated_year || 'Unable to determine',
-      number_plate: report.number_plate || 'Not Detected',
-      plate_valid: report.plate_valid ?? false,
-      invalid_reason: report.invalid_reason,
-      ocr_confidence: report.ocr_confidence ?? 0,
-      state_code: report.state_code || 'Unknown',
-      state_name: report.state_name || 'Unknown',
-      district_code: report.district_code || 'Unknown',
-      district_name: report.district_name || 'Unknown',
-      plate_type: report.plate_type || 'Private (White)',
-      plate_color: report.plate_color || 'White',
-      image_quality: report.image_quality || 'Poor',
-      blur_score: report.blur_score ?? 0,
-      blur_category: report.blur_category || 'Highly Blurred',
-      brightness: report.brightness || 'Unable to determine',
-      contrast: report.contrast || 'Unable to determine',
-      noise: report.noise || 'Unable to determine',
-      quality_details: report.quality_details,
-      tampered: report.tampered ?? false,
-      duplicate: report.duplicate ?? false,
-      screenshot: report.screenshot ?? false,
-      authenticity_details: report.authenticity_details,
-      bounding_boxes: report.bounding_boxes,
-      metadata: report.metadata || {
-        camera: 'Unable to determine',
-        device: 'Unable to determine',
-        gps: 'Unable to determine',
-        capture_time: 'Unable to determine',
-        software: 'Unable to determine',
-        resolution: 'Unable to determine',
-        iso: 'Unable to determine',
-      },
-      confidence_scores: report.confidence_scores || {
-        vehicle_detection: 0,
-        ocr: 0,
-        blur: 0,
-        brightness: 0,
-        tampering: 0,
-        screenshot: 0,
-        overall_quality: 0,
-      },
-      overall_confidence: report.overall_confidence ?? 0,
-      ai_summary: report.ai_summary || 'Analysis complete.',
-      ai_suitability: report.ai_suitability || 'Requires Better Image',
-    };
+    finalReport.pipeline_steps = createCompletedPipelineSteps();
 
     JOB_STORE.set(jobId, finalReport);
   } catch (err) {
@@ -969,4 +898,103 @@ export async function processVehicleImageJob(
       });
     }
   }
+}
+
+export async function buildVehicleProcessingReport(
+  jobId: string,
+  imageBuffer: Buffer | null,
+  filename: string,
+  presetKey?: string,
+  existingReports: VehicleProcessingReport[] = Array.from(JOB_STORE.values()).filter(
+    (entry) => entry.processing_id !== jobId
+  )
+): Promise<VehicleProcessingReport> {
+  const report = await inferImageAnalysis(imageBuffer, filename, existingReports);
+
+  if (presetKey) {
+    const presetObj = SAMPLE_VEHICLES.find((p) => p.id === presetKey);
+    if (presetObj && presetObj.mockReport) {
+      Object.assign(report, presetObj.mockReport);
+      const presetValidation = validateIndianNumberPlate(presetObj.mockReport.number_plate || '');
+      report.number_plate = presetValidation.cleanedText === 'Not Detected'
+        ? 'Not Detected'
+        : presetValidation.cleanedText || presetObj.mockReport.number_plate || '';
+      report.plate_valid = presetValidation.isValid;
+      report.invalid_reason = presetValidation.isValid ? undefined : presetValidation.reason;
+      report.state_code = presetValidation.stateCode || 'Unknown';
+      report.state_name = presetValidation.stateName || 'Unknown';
+      report.district_code = presetValidation.districtCode || 'Unknown';
+      report.district_name = presetValidation.districtName || 'Unknown';
+    }
+  }
+
+  if (!report.ai_summary || report.ai_summary.startsWith('Image analysis indicates')) {
+    const aiResult = await generateAiReport(report as Partial<VehicleProcessingReport>);
+    report.ai_summary = aiResult.summary || report.ai_summary;
+    report.ai_suitability = aiResult.suitability || report.ai_suitability;
+  }
+
+  const imageUrl = presetKey
+    ? SAMPLE_VEHICLES.find((p) => p.id === presetKey)?.imageUrl || createDataUrlFromBuffer(imageBuffer, filename)
+    : createDataUrlFromBuffer(imageBuffer, filename);
+
+  return {
+    processing_id: jobId,
+    filename,
+    upload_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    status: 'Completed',
+    progress: 100,
+    pipeline_steps: createCompletedPipelineSteps(),
+    image_url: imageUrl,
+    vehicle_type: report.vehicle_type || 'Unable to determine',
+    vehicle_category: report.vehicle_category || 'Car',
+    manufacturer: report.manufacturer || 'Unable to determine',
+    model: report.model || 'Unable to determine',
+    body_type: report.body_type || 'Unable to determine',
+    vehicle_color: report.vehicle_color || 'Unable to determine',
+    estimated_year: report.estimated_year || 'Unable to determine',
+    number_plate: report.number_plate || 'Not Detected',
+    plate_valid: report.plate_valid ?? false,
+    invalid_reason: report.invalid_reason,
+    ocr_confidence: report.ocr_confidence ?? 0,
+    state_code: report.state_code || 'Unknown',
+    state_name: report.state_name || 'Unknown',
+    district_code: report.district_code || 'Unknown',
+    district_name: report.district_name || 'Unknown',
+    plate_type: report.plate_type || 'Private (White)',
+    plate_color: report.plate_color || 'White',
+    image_quality: report.image_quality || 'Poor',
+    blur_score: report.blur_score ?? 0,
+    blur_category: report.blur_category || 'Highly Blurred',
+    brightness: report.brightness || 'Unable to determine',
+    contrast: report.contrast || 'Unable to determine',
+    noise: report.noise || 'Unable to determine',
+    quality_details: report.quality_details,
+    tampered: report.tampered ?? false,
+    duplicate: report.duplicate ?? false,
+    screenshot: report.screenshot ?? false,
+    authenticity_details: report.authenticity_details,
+    bounding_boxes: report.bounding_boxes,
+    metadata: report.metadata || {
+      camera: 'Unable to determine',
+      device: 'Unable to determine',
+      gps: 'Unable to determine',
+      capture_time: 'Unable to determine',
+      software: 'Unable to determine',
+      resolution: 'Unable to determine',
+      iso: 'Unable to determine',
+    },
+    confidence_scores: report.confidence_scores || {
+      vehicle_detection: 0,
+      ocr: 0,
+      blur: 0,
+      brightness: 0,
+      tampering: 0,
+      screenshot: 0,
+      overall_quality: 0,
+    },
+    overall_confidence: report.overall_confidence ?? 0,
+    ai_summary: report.ai_summary || 'Analysis complete.',
+    ai_suitability: report.ai_suitability || 'Requires Better Image',
+  };
 }

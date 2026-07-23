@@ -115,6 +115,10 @@ function logPipeline(jobId: string, stage: string, details?: Record<string, unkn
   console.info(`[pipeline:${jobId}] ${stage}`);
 }
 
+function isServerlessRuntime(): boolean {
+  return process.env.VERCEL === '1' || Boolean(process.env.AWS_REGION) || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+}
+
 // In-memory Job Store for background tasks & live status queue
 export const JOB_STORE = new Map<string, VehicleProcessingReport>();
 
@@ -362,6 +366,7 @@ async function inferImageAnalysis(
   let boundingBoxes: BoundingBox[] = [];
   let detectedPlateBox: [number, number, number, number] | null = null;
   let detectedVehicleBox: [number, number, number, number] | null = null;
+  const serverlessRuntime = isServerlessRuntime();
 
   if (imageBuffer && imageBuffer.length > 0) {
     try {
@@ -524,6 +529,14 @@ async function inferImageAnalysis(
 
       // Pass 2: Fallback or secondary check using Tesseract OCR if Gemini Vision didn't detect plate
       if (!numberPlate || numberPlate === 'Number plate not detected.' || numberPlate === 'Not Detected') {
+        if (serverlessRuntime) {
+          numberPlate = 'Number plate not detected.';
+          ocrConfidence = 0;
+          plateVisibility = 'Hidden';
+          logPipeline(jobId, 'ocr fallback skipped in serverless runtime', {
+            reason: 'Avoiding heavy Tesseract worker in serverless deployment.',
+          });
+        } else {
         try {
           logPipeline(jobId, 'ocr started');
           const worker = await getCachedTesseractWorker();
@@ -653,6 +666,7 @@ async function inferImageAnalysis(
           logPipeline(jobId, 'ocr failed, using fallback output', {
             numberPlate: 'Number plate not detected.',
           });
+        }
         }
       }
 

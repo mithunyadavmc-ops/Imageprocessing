@@ -37,7 +37,7 @@ export async function prepareImageForUpload(file: File): Promise<PreparedUploadP
   }
 
   const image = await loadImage(file);
-  const maxDimension = 1600;
+  const maxDimension = 1280;
   const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
   const targetWidth = Math.max(1, Math.round(image.width * scale));
   const targetHeight = Math.max(1, Math.round(image.height * scale));
@@ -52,7 +52,8 @@ export async function prepareImageForUpload(file: File): Promise<PreparedUploadP
   }
 
   context.drawImage(image, 0, 0, targetWidth, targetHeight);
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+  const jpegQuality = file.size > 4 * 1024 * 1024 ? 0.68 : 0.76;
+  const dataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
 
   return {
     image: dataUrl,

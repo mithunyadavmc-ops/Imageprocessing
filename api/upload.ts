@@ -2,6 +2,15 @@ import multer from 'multer';
 import { applyCors, logApi, logApiError } from './_utils';
 import { buildVehicleProcessingReport, JOB_STORE } from '../src/services/imagePipeline';
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '12mb',
+    },
+  },
+  maxDuration: 60,
+};
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024 },

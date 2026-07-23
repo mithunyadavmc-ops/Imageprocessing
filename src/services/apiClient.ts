@@ -14,7 +14,9 @@ export interface ApiSuccess<T> {
 
 export type ApiResult<T> = ApiSuccess<T> | ApiFailure;
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim().replace(/\/$/, '');
+const rawApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+const isPlaceholderApiBaseUrl = /your-render-backend-domain|<your-render-backend-domain>/i.test(rawApiBaseUrl);
+const API_BASE_URL = (isPlaceholderApiBaseUrl ? '' : rawApiBaseUrl).replace(/\/$/, '');
 
 export function buildApiUrl(path: string): string {
   if (/^https?:\/\//i.test(path)) {

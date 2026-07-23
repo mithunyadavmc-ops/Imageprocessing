@@ -373,6 +373,7 @@ export default function App() {
                         plateValid={currentReport.plate_valid}
                         invalidReason={currentReport.invalid_reason}
                         ocrConfidence={currentReport.ocr_confidence}
+                        onPlateChange={handleUpdatePlate}
                         stateCode={currentReport.state_code}
                         stateName={currentReport.state_name}
                         districtCode={currentReport.district_code}

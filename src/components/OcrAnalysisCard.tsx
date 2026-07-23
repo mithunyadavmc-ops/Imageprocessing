@@ -16,6 +16,7 @@ interface OcrAnalysisCardProps {
   plateValid: boolean;
   invalidReason?: string;
   ocrConfidence: number;
+  onPlateChange?: (value: string) => void;
   stateCode?: string;
   stateName?: string;
   districtCode?: string;
@@ -29,6 +30,7 @@ export const OcrAnalysisCard: React.FC<OcrAnalysisCardProps> = ({
   plateValid,
   invalidReason,
   ocrConfidence,
+  onPlateChange,
   stateCode,
   stateName,
   districtCode,
@@ -149,6 +151,26 @@ export const OcrAnalysisCard: React.FC<OcrAnalysisCardProps> = ({
               )}
             </div>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-slate-800 bg-slate-900/90 p-2.5">
+          <label htmlFor="manual-plate-input" className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-slate-400">
+            Manual Plate Correction
+          </label>
+          <input
+            id="manual-plate-input"
+            type="text"
+            value={numberPlate === 'Not Detected' ? '' : numberPlate}
+            onChange={(event) => onPlateChange?.(event.target.value)}
+            placeholder="Enter or correct the plate number"
+            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm tracking-[0.2em] text-slate-100 outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <p className="mt-1.5 text-[10px] text-slate-500">
+            Editing this field re-validates the registration against the Indian RTO format.
+          </p>
         </div>
 
         <div className="text-[11px] text-slate-300 bg-slate-900/60 rounded-lg p-2.5 border border-slate-800/80 leading-relaxed flex items-start gap-2">

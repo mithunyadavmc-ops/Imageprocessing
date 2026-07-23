@@ -32,8 +32,45 @@ export function logApi(scope: string, message: string, details?: Record<string, 
 }
 
 export function logApiError(scope: string, message: string, error: unknown, details?: Record<string, unknown>) {
-  console.error(`[${scope}] ${message}`, {
+  const base = {
     ...(details || {}),
     error: error instanceof Error ? error.message : String(error),
-  });
+  };
+
+  if (error instanceof Error && error.stack) {
+    console.error(`[${scope}] ${message}`, {
+      ...base,
+      stack: error.stack,
+    });
+    return;
+  }
+
+  console.error(`[${scope}] ${message}`, base);
+}
+
+export interface StructuredApiError {
+  success: false;
+  step: string;
+  error: string;
+  solution: string;
+  details?: string;
+}
+
+export function sendApiError(
+  res: any,
+  status: number,
+  step: string,
+  error: string,
+  solution: string,
+  details?: string
+) {
+  const payload: StructuredApiError = {
+    success: false,
+    step,
+    error,
+    solution,
+    details,
+  };
+
+  res.status(status).json(payload);
 }

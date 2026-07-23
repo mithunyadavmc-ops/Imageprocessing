@@ -1,8 +1,13 @@
 import { JOB_STORE } from '../../src/services/jobStore.ts';
-import { applyCors } from '../_utils';
+import { applyCors, sendApiError } from '../_utils';
 
 export default function handler(req: any, res: any) {
   if (applyCors(req, res)) {
+    return;
+  }
+
+  if (req.method && req.method !== 'GET') {
+    sendApiError(res, 405, 'METHOD', 'Method not allowed.', 'Use GET for /api/status/:processing_id requests.');
     return;
   }
 
@@ -10,9 +15,13 @@ export default function handler(req: any, res: any) {
   const job = JOB_STORE.get(jobId);
 
   if (!job) {
-    res.status(404).json({
-      error: `Processing ID '${jobId}' not found. In serverless deployments, /api/upload returns the completed report directly.`,
-    });
+    sendApiError(
+      res,
+      404,
+      'LOOKUP',
+      `Processing ID '${jobId}' not found.`,
+      'In serverless deployments, use the report returned directly by /api/upload.'
+    );
     return;
   }
 

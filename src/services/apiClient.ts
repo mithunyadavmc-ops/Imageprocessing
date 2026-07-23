@@ -110,5 +110,19 @@ export function getApiErrorMessage(result: ApiResult<unknown>): string {
   }
 
   const failure = result as ApiFailure;
-  return failure.details ? `${failure.error} ${failure.details}`.trim() : failure.error;
+  const payload = failure.payload;
+  const step =
+    typeof payload === 'object' && payload && 'step' in payload
+      ? String((payload as { step: unknown }).step)
+      : undefined;
+  const solution =
+    typeof payload === 'object' && payload && 'solution' in payload
+      ? String((payload as { solution: unknown }).solution)
+      : undefined;
+
+  const parts = [failure.error, failure.details, step ? `Step: ${step}` : '', solution ? `Solution: ${solution}` : '']
+    .filter(Boolean)
+    .map((item) => String(item).trim());
+
+  return parts.join(' ');
 }

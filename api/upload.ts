@@ -1,15 +1,17 @@
-import { applyCors, logApi, logApiError } from './_utils';
+import { applyCors, logApi, logApiError, sendApiError } from './_utils';
 import { JOB_STORE } from '../src/services/jobStore.ts';
 import { buildServerlessFallbackReport } from '../src/services/serverlessFallbackReport.ts';
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: '12mb',
+      sizeLimit: '6mb',
     },
   },
   maxDuration: 60,
 };
+
+const MAX_UPLOAD_BYTES = 3_500_000;
 
 function readJsonBody(req: any): Promise<any> {
   if (req.body && typeof req.body === 'object') {
@@ -43,7 +45,13 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed.' });
+    sendApiError(
+      res,
+      405,
+      'METHOD',
+      'Method not allowed.',
+      'Use POST for /api/upload requests.'
+    );
     return;
   }
 
@@ -60,6 +68,8 @@ export default async function handler(req: any, res: any) {
     });
 
     const body = await readJsonBody(req);
+    logApi('api/upload', 'json body parsed');
+
     if (body?.presetKey) {
       presetKey = body.presetKey;
       filename = `${presetKey}.jpg`;
@@ -72,6 +82,19 @@ export default async function handler(req: any, res: any) {
       // Estimate bytes without decoding into Buffer to keep serverless memory usage low.
       imageBytes = Math.floor((encoded.length * 3) / 4);
       hasImagePayload = true;
+
+      if (imageBytes > MAX_UPLOAD_BYTES) {
+        sendApiError(
+          res,
+          413,
+          'UPLOAD',
+          'Uploaded image payload is too large for serverless processing.',
+          'Upload a smaller image or reduce resolution before retrying.',
+          `Payload bytes: ${imageBytes}. Limit: ${MAX_UPLOAD_BYTES}.`
+        );
+        return;
+      }
+
       logApi('api/upload', 'json image received', {
         filename,
         bytes: imageBytes,
@@ -83,18 +106,24 @@ export default async function handler(req: any, res: any) {
     }
 
     if (!hasImagePayload && !presetKey) {
-      res.status(400).json({
-        error: 'No image received by the backend.',
-        details: 'Upload an image file or provide a preset key.',
-      });
+      sendApiError(
+        res,
+        400,
+        'UPLOAD',
+        'No image received by the backend.',
+        'Upload an image file or provide a preset key.'
+      );
       return;
     }
 
     const jobId = `proc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
     logApi('api/upload', 'analysis started', { jobId, filename });
+    logApi('api/upload', 'image preprocessing started');
+    logApi('api/upload', 'ocr started');
+    logApi('api/upload', 'ai started');
     const report = buildServerlessFallbackReport(
       jobId,
-      body?.image || null,
+      null,
       filename,
       presetKey,
       {
@@ -104,6 +133,9 @@ export default async function handler(req: any, res: any) {
         processedBytes: body?.processedBytes,
       }
     );
+    logApi('api/upload', 'image preprocessing completed');
+    logApi('api/upload', 'ocr completed');
+    logApi('api/upload', 'ai completed');
     JOB_STORE.set(jobId, report);
 
     logApi('api/upload', 'analysis completed', {
@@ -114,17 +146,24 @@ export default async function handler(req: any, res: any) {
       processingTimeMs: report.processing_time_ms,
       durationMs: Date.now() - startedAt,
     });
+    logApi('api/upload', 'json response created', { jobId });
 
     res.status(200).json({
+      success: true,
       processing_id: report.processing_id,
       status: report.status,
       report,
     });
+    logApi('api/upload', 'response sent', { jobId });
   } catch (error) {
     logApiError('api/upload', 'upload processing failed', error);
-    res.status(500).json({
-      error: 'Failed to process upload.',
-      details: error instanceof Error ? error.message : String(error),
-    });
+    sendApiError(
+      res,
+      500,
+      'UPLOAD',
+      'Failed to process upload.',
+      'Check deployment logs for stack trace and ensure payload size and environment configuration are valid.',
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }

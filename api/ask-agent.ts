@@ -1,6 +1,6 @@
 import { answerAgentQuestion } from '../src/services/aiAgent';
 import { JOB_STORE } from '../src/services/jobStore.ts';
-import { applyCors, logApi, logApiError } from './_utils';
+import { applyCors, logApi, logApiError, sendApiError } from './_utils';
 
 export default async function handler(req: any, res: any) {
   if (applyCors(req, res)) {
@@ -8,7 +8,7 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method !== 'POST') {
-    res.status(405).json({ error: 'Method not allowed.' });
+    sendApiError(res, 405, 'METHOD', 'Method not allowed.', 'Use POST for /api/ask-agent requests.');
     return;
   }
 
@@ -18,22 +18,35 @@ export default async function handler(req: any, res: any) {
     hasReportPayload: Boolean(report),
   });
   if (!question) {
-    res.status(400).json({ error: 'Missing question.' });
+    sendApiError(res, 400, 'INPUT', 'Missing question.', 'Provide a non-empty question in the request body.');
     return;
   }
 
   const job = (processing_id ? JOB_STORE.get(processing_id) : undefined) || report;
   if (!job) {
-    res.status(404).json({ error: 'Job not found.' });
+    sendApiError(
+      res,
+      404,
+      'LOOKUP',
+      'Job not found.',
+      'Provide a valid processing_id or include a report payload in the request body.'
+    );
     return;
   }
 
   try {
     const answer = await answerAgentQuestion(job, question);
     logApi('api/ask-agent', 'response generated', { processingId: processing_id });
-    res.status(200).json({ answer });
+    res.status(200).json({ success: true, answer });
   } catch (error) {
     logApiError('api/ask-agent', 'response generation failed', error, { processingId: processing_id });
-    res.status(500).json({ error: 'Failed to generate answer from AI Agent.' });
+    sendApiError(
+      res,
+      500,
+      'AI',
+      'Failed to generate answer from AI Agent.',
+      'Verify GEMINI_API_KEY, model availability, and request timeout limits.',
+      error instanceof Error ? error.message : String(error)
+    );
   }
 }

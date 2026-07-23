@@ -1,8 +1,13 @@
 import { JOB_STORE } from '../src/services/jobStore.ts';
-import { applyCors } from './_utils';
+import { applyCors, sendApiError } from './_utils';
 
 export default function handler(_req: any, res: any) {
   if (applyCors(_req, res)) {
+    return;
+  }
+
+  if (_req.method && _req.method !== 'GET') {
+    sendApiError(res, 405, 'METHOD', 'Method not allowed.', 'Use GET for /api/jobs requests.');
     return;
   }
 

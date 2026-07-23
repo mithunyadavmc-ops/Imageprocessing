@@ -40,6 +40,10 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState('Select an image to start analysis.');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const isHostedOnVercel = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
+  const hasExternalApiBaseUrl = Boolean(import.meta.env.VITE_API_BASE_URL);
+  const requiresExternalBackend = isHostedOnVercel && !hasExternalApiBaseUrl;
+
   const hasRenderableReport = Boolean(
     currentReport && (
       currentReport.status === 'Completed' ||
@@ -90,8 +94,19 @@ export default function App() {
     setActiveProcessingId(null);
   }, []);
 
+  useEffect(() => {
+    if (!requiresExternalBackend) return;
+
+    setErrorMessage('Deployment configuration missing: set VITE_API_BASE_URL to your backend URL.');
+    setStatusMessage('Frontend is running on Vercel but no external backend URL is configured.');
+  }, [requiresExternalBackend]);
+
   // Fetch jobs list on load and periodically
   const fetchJobs = useCallback(async () => {
+    if (requiresExternalBackend) {
+      return;
+    }
+
     const result = await apiFetchJson<VehicleProcessingReport[]>(
       '/api/jobs',
       { method: 'GET' },
@@ -107,7 +122,7 @@ export default function App() {
     }
 
     console.warn('[frontend] fetch jobs failed', result);
-  }, [currentReport]);
+  }, [currentReport, requiresExternalBackend]);
 
   useEffect(() => {
     fetchJobs();
@@ -117,6 +132,14 @@ export default function App() {
 
   // Poll for job status during async pipeline execution
   const pollJobStatus = async (processingId: string) => {
+    if (requiresExternalBackend) {
+      handleRequestError(
+        'Backend URL is not configured for deployment.',
+        'Set VITE_API_BASE_URL and redeploy the frontend.'
+      );
+      return;
+    }
+
     setActiveProcessingId(processingId);
     setStatusMessage(`Image uploaded successfully. Processing request ${processingId}...`);
     let completed = false;
@@ -261,6 +284,14 @@ export default function App() {
 
   // Upload file handler
   const handleUploadFile = async (file: File) => {
+    if (requiresExternalBackend) {
+      handleRequestError(
+        'Cannot upload in deployment without backend configuration.',
+        'Set VITE_API_BASE_URL to your Render/Railway backend URL and redeploy.'
+      );
+      return;
+    }
+
     console.info('[frontend] selected file for upload', {
       filename: file.name,
       size: file.size,
@@ -315,6 +346,14 @@ export default function App() {
 
   // Preset scenario selector handler
   const handleSelectPreset = async (preset: SampleVehiclePreset) => {
+    if (requiresExternalBackend) {
+      handleRequestError(
+        'Cannot run preset analysis in deployment without backend configuration.',
+        'Set VITE_API_BASE_URL to your Render/Railway backend URL and redeploy.'
+      );
+      return;
+    }
+
     console.info('[frontend] preset selected', { presetId: preset.id });
     setIsUploading(true);
     setActiveTab('analyzer');

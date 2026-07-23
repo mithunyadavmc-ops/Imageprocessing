@@ -1,6 +1,6 @@
 import { applyCors, logApi, logApiError } from './_utils';
-import { JOB_STORE } from '../src/services/jobStore';
-import { buildServerlessFallbackReport } from '../src/services/serverlessFallbackReport';
+import { JOB_STORE } from '../src/services/jobStore.ts';
+import { buildServerlessFallbackReport } from '../src/services/serverlessFallbackReport.ts';
 
 export const config = {
   api: {
@@ -49,7 +49,8 @@ export default async function handler(req: any, res: any) {
 
   try {
     const startedAt = Date.now();
-    let imageBuffer: Buffer | null = null;
+    let hasImagePayload = false;
+    let imageBytes = 0;
     let filename = 'uploaded_vehicle.jpg';
     let presetKey: string | undefined;
 
@@ -67,10 +68,13 @@ export default async function handler(req: any, res: any) {
       const base64Str = String(body.image);
       filename = body.filename || filename;
       const matches = base64Str.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-      imageBuffer = Buffer.from(matches?.[2] || base64Str, 'base64');
+      const encoded = matches?.[2] || base64Str;
+      // Estimate bytes without decoding into Buffer to keep serverless memory usage low.
+      imageBytes = Math.floor((encoded.length * 3) / 4);
+      hasImagePayload = true;
       logApi('api/upload', 'json image received', {
         filename,
-        bytes: imageBuffer.length,
+        bytes: imageBytes,
         width: body.width,
         height: body.height,
         originalBytes: body.originalBytes,
@@ -78,7 +82,7 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    if (!imageBuffer && !presetKey) {
+    if (!hasImagePayload && !presetKey) {
       res.status(400).json({
         error: 'No image received by the backend.',
         details: 'Upload an image file or provide a preset key.',

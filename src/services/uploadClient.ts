@@ -7,6 +7,8 @@ export interface PreparedUploadPayload {
   height: number;
 }
 
+const MAX_SERVERLESS_UPLOAD_BYTES = 3_500_000;
+
 function loadImage(file: File): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -38,9 +40,9 @@ export async function prepareImageForUpload(file: File): Promise<PreparedUploadP
 
   const image = await loadImage(file);
   const maxDimension = 1280;
-  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
-  const targetWidth = Math.max(1, Math.round(image.width * scale));
-  const targetHeight = Math.max(1, Math.round(image.height * scale));
+  let scale = Math.min(1, maxDimension / Math.max(image.width, image.height));
+  let targetWidth = Math.max(1, Math.round(image.width * scale));
+  let targetHeight = Math.max(1, Math.round(image.height * scale));
 
   const canvas = document.createElement('canvas');
   canvas.width = targetWidth;
@@ -51,15 +53,39 @@ export async function prepareImageForUpload(file: File): Promise<PreparedUploadP
     throw new Error('Unable to initialize image compression.');
   }
 
-  context.drawImage(image, 0, 0, targetWidth, targetHeight);
-  const jpegQuality = file.size > 4 * 1024 * 1024 ? 0.68 : 0.76;
-  const dataUrl = canvas.toDataURL('image/jpeg', jpegQuality);
+  const renderAndEncode = (quality: number) => {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', quality);
+  };
+
+  let jpegQuality = file.size > 4 * 1024 * 1024 ? 0.66 : 0.74;
+  let dataUrl = renderAndEncode(jpegQuality);
+  let estimatedBytes = estimateBase64Bytes(dataUrl);
+
+  // Keep payload under common serverless limits by degrading quality and resolution.
+  let attempts = 0;
+  while (estimatedBytes > MAX_SERVERLESS_UPLOAD_BYTES && attempts < 5) {
+    attempts += 1;
+    jpegQuality = Math.max(0.4, jpegQuality - 0.08);
+    scale *= 0.9;
+    targetWidth = Math.max(1, Math.round(image.width * scale));
+    targetHeight = Math.max(1, Math.round(image.height * scale));
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    dataUrl = renderAndEncode(jpegQuality);
+    estimatedBytes = estimateBase64Bytes(dataUrl);
+  }
+
+  if (estimatedBytes > MAX_SERVERLESS_UPLOAD_BYTES) {
+    throw new Error('Image is too large for deployment upload limits. Please use a smaller image.');
+  }
 
   return {
     image: dataUrl,
     filename: file.name.replace(/\.[^.]+$/, '') + '.jpg',
     originalBytes: file.size,
-    processedBytes: estimateBase64Bytes(dataUrl),
+    processedBytes: estimatedBytes,
     width: targetWidth,
     height: targetHeight,
   };

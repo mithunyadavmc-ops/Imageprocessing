@@ -96,22 +96,48 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use((req, res, next) => {
+    const allowedOrigin = process.env.CORS_ORIGIN || process.env.ALLOWED_ORIGIN || req.headers.origin || '*';
+    res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Vary', 'Origin');
+
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+
+    next();
+  });
+
   app.use(express.json({ limit: '20mb' }));
   app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
   // API Route: POST /upload or /api/upload
   const handleUpload = async (req: Request, res: Response) => {
     try {
+      const startedAt = Date.now();
       let imageBuffer: Buffer | null = null;
       let filename = 'uploaded_vehicle.jpg';
       let presetKey: string | undefined = undefined;
 
+      console.info('[server/upload] request received', {
+        method: req.method,
+        contentType: req.headers['content-type'] || 'unknown',
+      });
+
       if (req.file) {
         imageBuffer = req.file.buffer;
         filename = req.file.originalname;
+        console.info('[server/upload] multipart image received', {
+          filename,
+          bytes: imageBuffer.length,
+        });
       } else if (req.body?.presetKey) {
         presetKey = req.body.presetKey;
         filename = `${presetKey}.jpg`;
+        console.info('[server/upload] preset received', { presetKey });
       } else if (req.body?.image) {
         const base64Str = req.body.image as string;
         filename = req.body.filename || 'uploaded_vehicle.jpg';
@@ -121,9 +147,25 @@ async function startServer() {
         } else {
           imageBuffer = Buffer.from(base64Str, 'base64');
         }
+        console.info('[server/upload] json image received', {
+          filename,
+          bytes: imageBuffer.length,
+          width: req.body.width,
+          height: req.body.height,
+          originalBytes: req.body.originalBytes,
+          processedBytes: req.body.processedBytes,
+        });
+      }
+
+      if (!imageBuffer && !presetKey) {
+        return res.status(400).json({
+          error: 'No image received by the backend.',
+          details: 'Upload an image file or provide a preset key.',
+        });
       }
 
       const jobId = `proc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+      console.info('[server/upload] analysis started', { jobId, filename });
 
       let initialImageUrl: string | undefined = undefined;
       if (presetKey) {
@@ -174,6 +216,14 @@ async function startServer() {
       if (process.env.VERCEL === '1') {
         const completedReport = await buildVehicleProcessingReport(jobId, imageBuffer, filename, presetKey);
         JOB_STORE.set(jobId, completedReport);
+        console.info('[server/upload] serverless analysis completed', {
+          jobId,
+          filename,
+          plate: completedReport.number_plate,
+          vehicleType: completedReport.vehicle_type,
+          processingTimeMs: completedReport.processing_time_ms,
+          durationMs: Date.now() - startedAt,
+        });
         return res.status(200).json({
           processing_id: jobId,
           status: 'Completed',
@@ -184,13 +234,19 @@ async function startServer() {
       // Trigger background processing asynchronously without blocking response
       processVehicleImageJob(jobId, imageBuffer, filename, presetKey);
 
+      console.info('[server/upload] job queued', {
+        jobId,
+        filename,
+        durationMs: Date.now() - startedAt,
+      });
+
       return res.status(200).json({
         processing_id: jobId,
         status: 'Pending',
         message: 'Image queued successfully for asynchronous processing.',
       });
     } catch (err) {
-      console.error('Error in /upload handler:', err);
+      console.error('[server/upload] error in upload handler', err);
       return res.status(500).json({
         error: 'Failed to initiate processing task.',
         details: err instanceof Error ? err.message : String(err),

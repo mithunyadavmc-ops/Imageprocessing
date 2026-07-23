@@ -26,7 +26,9 @@ import { QualityAndBlurCard } from './components/QualityAndBlurCard';
 import { UploadSection } from './components/UploadSection';
 import { VehicleInfoCard } from './components/VehicleInfoCard';
 import { SampleVehiclePreset } from './data/sampleVehicles';
+import { apiFetchJson, getApiErrorMessage } from './services/apiClient';
 import { validateIndianNumberPlate } from './services/indianRtoDatabase';
+import { prepareImageForUpload } from './services/uploadClient';
 import { VehicleProcessingReport } from './types';
 
 export default function App() {
@@ -35,8 +37,31 @@ export default function App() {
   const [currentReport, setCurrentReport] = useState<VehicleProcessingReport | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [activeProcessingId, setActiveProcessingId] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState('Select an image to start analysis.');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const hasRenderableReport = Boolean(
+    currentReport && (
+      currentReport.status === 'Completed' ||
+      currentReport.progress >= 100 ||
+      (currentReport.bounding_boxes?.length ?? 0) > 0 ||
+      currentReport.ocr_confidence > 0 ||
+      ![
+        'Analyzing Image...',
+        'Analyzing...',
+        'Processing',
+        'Unable to determine',
+      ].includes(currentReport.vehicle_type)
+    )
+  );
 
   const handleCompletedReport = useCallback((reportData: VehicleProcessingReport) => {
+    console.info('[frontend] analysis completed', {
+      processingId: reportData.processing_id,
+      plate: reportData.number_plate,
+      vehicleType: reportData.vehicle_type,
+      processingTimeMs: reportData.processing_time_ms,
+    });
     setCurrentReport(reportData);
     setJobs((prev) => {
       const next = [...prev];
@@ -48,24 +73,40 @@ export default function App() {
       }
       return next;
     });
+    setErrorMessage(null);
+    setStatusMessage(
+      `Analysis completed for ${reportData.filename}. ${reportData.number_plate || 'Number plate not detected.'}`
+    );
+    setIsUploading(false);
+    setActiveProcessingId(null);
+  }, []);
+
+  const handleRequestError = useCallback((userMessage: string, details?: string) => {
+    const fullMessage = details ? `${userMessage} ${details}` : userMessage;
+    console.error('[frontend] request error', { userMessage, details });
+    setErrorMessage(fullMessage);
+    setStatusMessage('Processing stopped.');
     setIsUploading(false);
     setActiveProcessingId(null);
   }, []);
 
   // Fetch jobs list on load and periodically
   const fetchJobs = useCallback(async () => {
-    try {
-      const res = await fetch('/api/jobs');
-      if (res.ok) {
-        const data = await res.json();
-        setJobs(data);
-        if (!currentReport && data.length > 0) {
-          setCurrentReport(data[0]);
-        }
+    const result = await apiFetchJson<VehicleProcessingReport[]>(
+      '/api/jobs',
+      { method: 'GET' },
+      'fetch jobs'
+    );
+
+    if (result.ok) {
+      setJobs(result.data);
+      if (!currentReport && result.data.length > 0) {
+        setCurrentReport(result.data[0]);
       }
-    } catch {
-      // Silently swallow transient network errors during background polling
+      return;
     }
+
+    console.warn('[frontend] fetch jobs failed', result);
   }, [currentReport]);
 
   useEffect(() => {
@@ -77,13 +118,34 @@ export default function App() {
   // Poll for job status during async pipeline execution
   const pollJobStatus = async (processingId: string) => {
     setActiveProcessingId(processingId);
+    setStatusMessage(`Image uploaded successfully. Processing request ${processingId}...`);
     let completed = false;
+    let attempts = 0;
 
     while (!completed) {
+      attempts += 1;
       try {
-        const res = await fetch(`/api/status/${processingId}`);
-        if (res.ok) {
-          const statusData = await res.json();
+        const statusResult = await apiFetchJson<{
+          processing_id: string;
+          status: VehicleProcessingReport['status'];
+          progress: number;
+          pipeline_steps?: VehicleProcessingReport['pipeline_steps'];
+          filename?: string;
+          upload_time?: string;
+          error?: string;
+        }>(`/api/status/${processingId}`, { method: 'GET' }, 'poll job status');
+
+        if (!statusResult.ok) {
+          handleRequestError(
+            'Unable to fetch processing status from the backend.',
+            getApiErrorMessage(statusResult)
+          );
+          completed = true;
+          break;
+        }
+
+        const statusData = statusResult.data;
+        setStatusMessage(`Processing ${statusData.filename || processingId}: ${statusData.status} (${statusData.progress || 0}%)`);
 
           // Update currentReport with real-time status and steps during processing
           if (statusData.status === 'Processing' || statusData.status === 'Pending') {
@@ -140,15 +202,32 @@ export default function App() {
           if (statusData.status === 'Completed' || statusData.status === 'Failed') {
             completed = true;
             // Fetch final result report
-            const resultRes = await fetch(`/api/results/${processingId}`);
-            if (resultRes.ok) {
-              const reportData = await resultRes.json();
-              handleCompletedReport(reportData);
+            const reportResult = await apiFetchJson<VehicleProcessingReport>(
+              `/api/results/${processingId}`,
+              { method: 'GET' },
+              'fetch job result'
+            );
+
+            if (!reportResult.ok) {
+              handleRequestError(
+                'Processing finished but the final analysis response could not be loaded.',
+                getApiErrorMessage(reportResult)
+              );
+              break;
             }
+
+            handleCompletedReport(reportResult.data);
           }
-        }
       } catch (err) {
-        console.error('Job polling error:', err);
+        handleRequestError(
+          'Job polling failed unexpectedly.',
+          err instanceof Error ? err.message : String(err)
+        );
+        completed = true;
+      }
+      if (attempts >= 180) {
+        handleRequestError('Processing timed out.', 'The backend did not finish within the expected time window.');
+        completed = true;
       }
       if (!completed) {
         await new Promise((r) => setTimeout(r, 400));
@@ -182,56 +261,100 @@ export default function App() {
 
   // Upload file handler
   const handleUploadFile = async (file: File) => {
+    console.info('[frontend] selected file for upload', {
+      filename: file.name,
+      size: file.size,
+      type: file.type,
+    });
     setIsUploading(true);
     setActiveTab('analyzer');
     setCurrentReport(null);
-
-    const formData = new FormData();
-    formData.append('image', file);
+    setErrorMessage(null);
+    setStatusMessage(`Preparing ${file.name} for upload...`);
 
     try {
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      const prepared = await prepareImageForUpload(file);
+      console.info('[frontend] image prepared for upload', prepared);
+      setStatusMessage(`Image uploaded successfully. Processing ${prepared.filename}...`);
 
-      const data = await res.json();
+      const uploadResult = await apiFetchJson<{
+        processing_id?: string;
+        status?: string;
+        report?: VehicleProcessingReport;
+        error?: string;
+        details?: string;
+      }>('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(prepared),
+      }, 'upload image');
+
+      if (!uploadResult.ok) {
+        handleRequestError(
+          'Image upload failed.',
+          getApiErrorMessage(uploadResult)
+        );
+        return;
+      }
+
+      const data = uploadResult.data;
       if (data.report) {
         handleCompletedReport(data.report);
       } else if (data.processing_id) {
-        pollJobStatus(data.processing_id);
+        void pollJobStatus(data.processing_id);
       } else {
-        setIsUploading(false);
+        handleRequestError('The backend did not return an analysis result.', 'Please check the deployment logs.');
       }
     } catch (err) {
-      console.error('Upload error:', err);
-      setIsUploading(false);
+      handleRequestError(
+        'Image upload failed before processing started.',
+        err instanceof Error ? err.message : String(err)
+      );
     }
   };
 
   // Preset scenario selector handler
   const handleSelectPreset = async (preset: SampleVehiclePreset) => {
+    console.info('[frontend] preset selected', { presetId: preset.id });
     setIsUploading(true);
     setActiveTab('analyzer');
+    setErrorMessage(null);
+    setStatusMessage(`Loading preset ${preset.title}...`);
 
     try {
-      const res = await fetch('/api/upload', {
+      const uploadResult = await apiFetchJson<{
+        processing_id?: string;
+        status?: string;
+        report?: VehicleProcessingReport;
+        error?: string;
+        details?: string;
+      }>('/api/upload', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ presetKey: preset.id }),
-      });
+      }, 'load preset');
 
-      const data = await res.json();
+      if (!uploadResult.ok) {
+        handleRequestError(
+          'Preset analysis failed.',
+          getApiErrorMessage(uploadResult)
+        );
+        return;
+      }
+
+      const data = uploadResult.data;
       if (data.report) {
         handleCompletedReport(data.report);
       } else if (data.processing_id) {
-        pollJobStatus(data.processing_id);
+        void pollJobStatus(data.processing_id);
       } else {
-        setIsUploading(false);
+        handleRequestError('The backend did not return preset analysis output.', 'Please check the deployment logs.');
       }
     } catch (err) {
-      console.error('Preset select error:', err);
-      setIsUploading(false);
+      handleRequestError(
+        'Preset analysis request failed.',
+        err instanceof Error ? err.message : String(err)
+      );
     }
   };
 
@@ -270,6 +393,47 @@ export default function App() {
           isUploading={isUploading}
         />
 
+        <div className={`rounded-2xl border px-5 py-4 shadow-lg ${
+          errorMessage
+            ? 'border-rose-500/30 bg-rose-500/10 text-rose-100'
+            : isUploading
+            ? 'border-blue-500/30 bg-blue-500/10 text-blue-100'
+            : 'border-emerald-500/20 bg-emerald-500/5 text-slate-100'
+        }`}>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">
+                {errorMessage ? 'Processing Error' : isUploading ? 'Processing...' : 'Processing Status'}
+              </div>
+              <p className="mt-1 text-xs sm:text-sm opacity-90">
+                {errorMessage || statusMessage}
+              </p>
+            </div>
+            {currentReport && !errorMessage && (
+              <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                <div>
+                  <div className="text-slate-400">Vehicle Registration Number</div>
+                  <div className="font-semibold text-slate-100">{currentReport.number_plate || 'Number plate not detected.'}</div>
+                </div>
+                <div>
+                  <div className="text-slate-400">Vehicle Type</div>
+                  <div className="font-semibold text-slate-100">{currentReport.vehicle_type || 'Unable to identify vehicle.'}</div>
+                </div>
+                <div>
+                  <div className="text-slate-400">OCR Confidence</div>
+                  <div className="font-semibold text-slate-100">{currentReport.ocr_confidence}%</div>
+                </div>
+                <div>
+                  <div className="text-slate-400">Processing Time</div>
+                  <div className="font-semibold text-slate-100">
+                    {currentReport.processing_time_ms ? `${(currentReport.processing_time_ms / 1000).toFixed(2)}s` : 'Calculating...'}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Tab 1: Live Analyzer View */}
         {activeTab === 'analyzer' && (
           <div className="space-y-8">
@@ -284,7 +448,7 @@ export default function App() {
             )}
 
             {/* Results Inspection Dashboard */}
-            {currentReport && currentReport.status === 'Completed' && (
+            {hasRenderableReport && currentReport && (
               <div className="space-y-6">
                 {/* Export Bar */}
                 <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-900/60 px-5 py-3 shadow-lg backdrop-blur-md">

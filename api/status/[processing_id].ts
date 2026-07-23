@@ -1,6 +1,11 @@
 import { JOB_STORE } from '../../src/services/imagePipeline';
+import { applyCors } from '../_utils';
 
 export default function handler(req: any, res: any) {
+  if (applyCors(req, res)) {
+    return;
+  }
+
   const jobId = req.query?.processing_id;
   const job = JOB_STORE.get(jobId);
 

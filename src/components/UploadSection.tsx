@@ -2,10 +2,8 @@ import React, { useRef, useState } from 'react';
 import {
   UploadCloud,
   FileImage,
-  Camera,
+  Loader2,
   Sparkles,
-  CheckCircle2,
-  AlertTriangle,
   Zap,
 } from 'lucide-react';
 import { SAMPLE_VEHICLES, SampleVehiclePreset } from '../data/sampleVehicles';
@@ -97,8 +95,8 @@ export const UploadSection: React.FC<UploadSectionProps> = ({
               }}
               className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white shadow-lg shadow-blue-600/30 hover:bg-blue-500 transition-all active:scale-95 disabled:opacity-50"
             >
-              <FileImage className="h-4 w-4" />
-              <span>Select Local Image</span>
+              {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileImage className="h-4 w-4" />}
+              <span>{isUploading ? 'Processing Image...' : 'Select Local Image'}</span>
             </button>
 
             <span className="text-xs text-slate-500">or try preset scenarios below</span>

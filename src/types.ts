@@ -130,6 +130,7 @@ export interface VehicleProcessingReport {
   upload_time: string;
   status: JobStatus;
   progress: number;
+  processing_time_ms?: number;
   pipeline_steps?: PipelineStepStatus[];
   image_url?: string;
   

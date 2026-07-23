@@ -13,6 +13,10 @@ interface ImageDescriptionCardProps {
 }
 
 export const ImageDescriptionCard: React.FC<ImageDescriptionCardProps> = ({ report }) => {
+  const hasIdentifiedVehicle = [report.vehicle_type, report.manufacturer, report.model].some(
+    (value) => value && !value.toLowerCase().includes('unable to identify') && !value.toLowerCase().includes('unable to determine')
+  );
+
   const description =
     report.ai_summary ||
     `This image contains a ${report.vehicle_color} ${report.manufacturer} ${report.model} (${report.vehicle_category}). The plate was ${report.plate_valid ? 'successfully read' : 'reviewed for validation'} and the image quality was assessed as ${report.image_quality}.`;
@@ -20,7 +24,9 @@ export const ImageDescriptionCard: React.FC<ImageDescriptionCardProps> = ({ repo
   const details = [
     {
       label: 'Detected subject',
-      value: `${report.vehicle_color} ${report.manufacturer} ${report.model}`.trim(),
+      value: hasIdentifiedVehicle
+        ? `${report.vehicle_color} ${report.manufacturer} ${report.model}`.replace(/\s+/g, ' ').trim()
+        : 'Unable to identify vehicle.',
     },
     {
       label: 'Vehicle type',

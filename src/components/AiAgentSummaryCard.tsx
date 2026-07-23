@@ -9,6 +9,7 @@ import {
   MessageSquare,
   Zap,
 } from 'lucide-react';
+import { apiFetchJson, getApiErrorMessage } from '../services/apiClient';
 import { VehicleProcessingReport } from '../types';
 
 interface AiAgentSummaryCardProps {
@@ -30,28 +31,39 @@ export const AiAgentSummaryCard: React.FC<AiAgentSummaryCardProps> = ({ report }
     setQuestion('');
     setChatHistory((prev) => [...prev, { role: 'user', text: userText }]);
     setLoading(true);
+    console.info('[frontend] ask-agent request started', {
+      processingId: report.processing_id,
+      question: userText,
+    });
 
     try {
-      const response = await fetch('/api/ask-agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          processing_id: report.processing_id,
-          report,
-          question: userText,
-        }),
-      });
+      const result = await apiFetchJson<{ answer?: string; error?: string; details?: string }>(
+        '/api/ask-agent',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            processing_id: report.processing_id,
+            report,
+            question: userText,
+          }),
+        },
+        'ask ai agent'
+      );
 
-      const data = await response.json();
-      if (data.answer) {
-        setChatHistory((prev) => [...prev, { role: 'agent', text: data.answer }]);
+      if (result.ok && result.data.answer) {
+        setChatHistory((prev) => [...prev, { role: 'agent', text: result.data.answer! }]);
       } else {
+        const message = result.ok
+          ? 'Unable to process query. Please try again.'
+          : getApiErrorMessage(result);
         setChatHistory((prev) => [
           ...prev,
-          { role: 'agent', text: 'Unable to process query. Please try again.' },
+          { role: 'agent', text: message },
         ]);
       }
     } catch (err) {
+      console.error('[frontend] ask-agent request failed', err);
       setChatHistory((prev) => [
         ...prev,
         {

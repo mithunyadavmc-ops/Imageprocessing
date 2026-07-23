@@ -106,6 +106,15 @@ async function detectPlateColorFromPixels(
   }
 }
 
+function logPipeline(jobId: string, stage: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.info(`[pipeline:${jobId}] ${stage}`, details);
+    return;
+  }
+
+  console.info(`[pipeline:${jobId}] ${stage}`);
+}
+
 // In-memory Job Store for background tasks & live status queue
 export const JOB_STORE = new Map<string, VehicleProcessingReport>();
 
@@ -271,11 +280,23 @@ function createCompletedPipelineSteps(): PipelineStepStatus[] {
 }
 
 async function inferImageAnalysis(
+  jobId: string,
   imageBuffer: Buffer | null,
   filename: string,
   existingReports: VehicleProcessingReport[] = []
 ): Promise<Partial<VehicleProcessingReport> & { image_dimensions: { width: number; height: number }; dominant_color: string; brightness_score: number; contrast_score: number; sharpness_score: number; blur_score: number; blur_category: 'Sharp' | 'Slight Blur' | 'Moderate Blur' | 'Highly Blurred'; screenshot: boolean; tampered: boolean; duplicate: boolean; vehicle_confidence: number; ocr_confidence: number; plate_visibility: 'Clear' | 'Partial' | 'Hidden'; number_plate: string; vehicle_type: string; vehicle_category: DetectionCategory; manufacturer: string; model: string; vehicle_color: string; body_type: string; estimated_year: string; image_quality: 'Excellent' | 'Good' | 'Average' | 'Poor'; brightness: string; contrast: string; noise: string; quality_details: ImageQualityMetrics; authenticity_details: NonNullable<VehicleProcessingReport['authenticity_details']>; bounding_boxes: BoundingBox[]; metadata: ExifMetadata; overall_confidence: number; ai_summary: string; ai_suitability: string; }> {
+  logPipeline(jobId, 'image received', {
+    filename,
+    hasBuffer: Boolean(imageBuffer),
+    bytes: imageBuffer?.length || 0,
+  });
+
   const fallbackMetadata = await extractExifData(imageBuffer, filename);
+  logPipeline(jobId, 'metadata extracted', {
+    camera: fallbackMetadata.camera,
+    device: fallbackMetadata.device,
+    resolution: fallbackMetadata.resolution,
+  });
 
   let width = 0;
   let height = 0;
@@ -288,10 +309,10 @@ async function inferImageAnalysis(
   let screenshot = false;
   let tampered = false;
   let duplicate = false;
-  let numberPlate = 'No vehicle number plate detected.';
+  let numberPlate = 'Number plate not detected.';
   let ocrConfidence = 0;
   let plateVisibility: 'Clear' | 'Partial' | 'Hidden' = 'Hidden';
-  let vehicleType = 'Unable to determine';
+  let vehicleType = 'Unable to identify vehicle.';
   let vehicleCategory: DetectionCategory = 'Car';
   let manufacturer = 'Unable to determine';
   let model = 'Unable to determine';
@@ -344,6 +365,7 @@ async function inferImageAnalysis(
 
   if (imageBuffer && imageBuffer.length > 0) {
     try {
+      logPipeline(jobId, 'preprocessing started');
       const image = sharp(imageBuffer);
       const metadata = await image.metadata();
       width = metadata.width || 0;
@@ -411,6 +433,14 @@ async function inferImageAnalysis(
         bodyType = 'Utility body';
       }
 
+      logPipeline(jobId, 'preprocessing completed', {
+        width,
+        height,
+        blurScore,
+        blurCategory,
+        dominantColor,
+      });
+
       if (width > 0 && height > 0) {
         screenshot = width < 900 && height < 900 ? false : (width / height > 1.7 || height / width > 1.7) && (width < 1600 || height < 1600);
       }
@@ -431,6 +461,7 @@ async function inferImageAnalysis(
 
       // Pass 1: Try Gemini Vision multimodal model to directly target license plate location & extract exact registration text & plate color
       try {
+        logPipeline(jobId, 'ai vision analysis started');
         const geminiVisionResult = await analyzeVehicleImageWithGeminiVision(imageBuffer, filename);
         if (geminiVisionResult) {
           if (geminiVisionResult.number_plate && geminiVisionResult.number_plate.length >= 3) {
@@ -478,14 +509,23 @@ async function inferImageAnalysis(
           if (geminiVisionResult.recommendation) {
             geminiSuitability = geminiVisionResult.recommendation;
           }
+
+          logPipeline(jobId, 'ai vision analysis completed', {
+            plate: numberPlate,
+            ocrConfidence,
+            vehicleType,
+            manufacturer,
+            model,
+          });
         }
       } catch (err) {
-        console.warn('Gemini Vision analysis skipped/failed:', err);
+        console.warn(`[pipeline:${jobId}] ai vision analysis skipped/failed`, err);
       }
 
       // Pass 2: Fallback or secondary check using Tesseract OCR if Gemini Vision didn't detect plate
-      if (!numberPlate || numberPlate === 'No vehicle number plate detected.' || numberPlate === 'Not Detected') {
+      if (!numberPlate || numberPlate === 'Number plate not detected.' || numberPlate === 'Not Detected') {
         try {
+          logPipeline(jobId, 'ocr started');
           const worker = await getCachedTesseractWorker();
           const imgObj = sharp(imageBuffer);
           const imgMeta = await imgObj.metadata();
@@ -598,12 +638,21 @@ async function inferImageAnalysis(
             ocrConfidence = Math.min(99, Math.max(65, detectedConf));
             plateVisibility = 'Clear';
           } else {
-            numberPlate = 'Not Detected';
+            numberPlate = 'Number plate not detected.';
             ocrConfidence = 0;
             plateVisibility = 'Hidden';
           }
+
+          logPipeline(jobId, 'ocr completed', {
+            numberPlate,
+            ocrConfidence,
+            plateVisibility,
+          });
         } catch {
           // Fallback when OCR processing fails
+          logPipeline(jobId, 'ocr failed, using fallback output', {
+            numberPlate: 'Number plate not detected.',
+          });
         }
       }
 
@@ -630,7 +679,7 @@ async function inferImageAnalysis(
   const districtName = rtoValidation.districtName || 'Unknown';
 
   if (rtoValidation.cleanedText === 'Not Detected') {
-    numberPlate = 'Not Detected';
+    numberPlate = 'Number plate not detected.';
   } else if (rtoValidation.cleanedText) {
     numberPlate = rtoValidation.cleanedText;
   }
@@ -777,7 +826,19 @@ async function inferImageAnalysis(
 
   const defaultAiSummary = `Image analysis indicates a ${vehicleType.toLowerCase()} with ${vehicleColor.toLowerCase()} dominant tones. The plate result was ${numberPlate.toLowerCase()}, OCR confidence ${ocrConfidence}%, brightness was ${brightness.toLowerCase()}, blur was ${blurCategory.toLowerCase()}, and overall quality was ${imageQuality.toLowerCase()}. ${tampered ? 'Tampering indicators were flagged.' : 'No clear tampering indicators were identified.'}`;
   const finalAiSummary = geminiSummary || defaultAiSummary;
-  const finalAiSuitability = geminiSuitability || (tampered ? 'Rejected Due to Poor Quality' : imageQuality === 'Poor' || numberPlate === 'Not Detected' || numberPlate.includes('detected') ? 'Requires Better Image' : 'Suitable for Verification');
+  const finalAiSuitability = geminiSuitability || (tampered ? 'Rejected Due to Poor Quality' : imageQuality === 'Poor' || numberPlate === 'Not Detected' || numberPlate.toLowerCase().includes('not detected') ? 'Requires Better Image' : 'Suitable for Verification');
+
+  if (vehicleType === 'Unable to identify vehicle.' && manufacturer === 'Unable to determine' && model === 'Unable to determine') {
+    logPipeline(jobId, 'vehicle identification fallback used');
+  }
+
+  logPipeline(jobId, 'response generated', {
+    vehicleType,
+    numberPlate,
+    stateName,
+    ocrConfidence,
+    overallConfidence,
+  });
 
   return {
     vehicle_type: vehicleType,
@@ -909,7 +970,10 @@ export async function buildVehicleProcessingReport(
     (entry) => entry.processing_id !== jobId
   )
 ): Promise<VehicleProcessingReport> {
-  const report = await inferImageAnalysis(imageBuffer, filename, existingReports);
+  const startedAt = Date.now();
+  logPipeline(jobId, 'build started', { filename, presetKey: presetKey || null });
+
+  const report = await inferImageAnalysis(jobId, imageBuffer, filename, existingReports);
 
   if (presetKey) {
     const presetObj = SAMPLE_VEHICLES.find((p) => p.id === presetKey);
@@ -929,9 +993,13 @@ export async function buildVehicleProcessingReport(
   }
 
   if (!report.ai_summary || report.ai_summary.startsWith('Image analysis indicates')) {
+    logPipeline(jobId, 'ai reasoning started');
     const aiResult = await generateAiReport(report as Partial<VehicleProcessingReport>);
     report.ai_summary = aiResult.summary || report.ai_summary;
     report.ai_suitability = aiResult.suitability || report.ai_suitability;
+    logPipeline(jobId, 'ai reasoning completed', {
+      suitability: report.ai_suitability,
+    });
   }
 
   const imageUrl = presetKey
@@ -944,6 +1012,7 @@ export async function buildVehicleProcessingReport(
     upload_time: new Date().toISOString().replace('T', ' ').slice(0, 19),
     status: 'Completed',
     progress: 100,
+    processing_time_ms: Date.now() - startedAt,
     pipeline_steps: createCompletedPipelineSteps(),
     image_url: imageUrl,
     vehicle_type: report.vehicle_type || 'Unable to determine',

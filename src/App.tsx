@@ -41,7 +41,9 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const isHostedOnVercel = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
-  const hasExternalApiBaseUrl = Boolean(import.meta.env.VITE_API_BASE_URL);
+  const externalApiBaseUrl = (import.meta.env.VITE_API_BASE_URL || '').trim();
+  const isPlaceholderBackendUrl = /your-render-backend-domain|<your-render-backend-domain>/i.test(externalApiBaseUrl);
+  const hasExternalApiBaseUrl = Boolean(externalApiBaseUrl) && !isPlaceholderBackendUrl;
   const requiresExternalBackend = isHostedOnVercel && !hasExternalApiBaseUrl;
 
   const hasRenderableReport = Boolean(
@@ -97,9 +99,15 @@ export default function App() {
   useEffect(() => {
     if (!requiresExternalBackend) return;
 
+    if (isPlaceholderBackendUrl) {
+      setErrorMessage('Deployment configuration invalid: VITE_API_BASE_URL is still set to a placeholder value.');
+      setStatusMessage('Set VITE_API_BASE_URL to your real backend URL and redeploy Vercel.');
+      return;
+    }
+
     setErrorMessage('Deployment configuration missing: set VITE_API_BASE_URL to your backend URL.');
     setStatusMessage('Frontend is running on Vercel but no external backend URL is configured.');
-  }, [requiresExternalBackend]);
+  }, [isPlaceholderBackendUrl, requiresExternalBackend]);
 
   // Fetch jobs list on load and periodically
   const fetchJobs = useCallback(async () => {
